@@ -57,21 +57,32 @@ def convert_contrast_to_yn(json_data):
         })
     }
 
-def convert_pubmed_to_yn(dataset):
+def convert_pubmed_to_yn(dataset, test_split):
     def convert_example(example):
         return {
             'question': example['question'],
             'context': ' '.join(example['context']['contexts']),
             'label': example['final_decision'],
-            'pubid': example['pubid'],
-            'original_answer': example['long_answer']
+            'pubid': example['pubid']
         }
-    
+
+    examples = dataset['train'].map(convert_example)
+    examples = examples.filter(lambda x: x['label'] != 'maybe')
+
     converted_dataset = {}
-    for split in dataset.keys():
-        ds = dataset[split].map(convert_example)
-        converted_dataset[split] = ds.filter(lambda x: x['label'] != 'maybe')
+    if test_split:
+        examples = list(examples)
+        test_examples = [ex for ex in examples if int(ex['pubid']) in test_split]
+        train_examples = [ex for ex in examples if int(ex['pubid']) not in test_split]
         
+        converted_dataset['train'] = datasets.Dataset.from_list(train_examples)
+        converted_dataset['test'] = datasets.Dataset.from_list(test_examples)
+    else:
+        no_examples = list(examples.filter(lambda x: x['final_decision'] == 'no'))
+        yes_examples = list(examples.filter(lambda x: x['final_decision'] == 'yes'))[:22700]
+        converted_dataset['train'] = datasets.Dataset.from_list(no_examples + yes_examples).shuffle(seed=0)
+        
+    for split in converted_dataset.keys():
         labels = converted_dataset[split]['label']
         label_counts = {}
         for label in labels:
@@ -79,6 +90,7 @@ def convert_pubmed_to_yn(dataset):
         print(f"\nLabel distribution in {split} split:")
         for label, count in label_counts.items():
             print(f"{label}: {count} ({count/len(labels)*100:.2f}%)")
+        print(f"Total examples in {split}: {len(labels)}")
     
     return datasets.DatasetDict(converted_dataset)
 
@@ -93,7 +105,6 @@ def compute_metrics(eval_preds, dataset, output_dir: str = "evaluation_results")
     label_map = {0: 'yes', 1: 'no'}
     text_preds = [label_map[p] for p in predictions]
     text_labels = [label_map[l] for l in labels]
-    print("Unique labels in dataset:", np.unique(labels))
     print("Label map:", label_map)
     
     metrics = {}
@@ -117,6 +128,8 @@ def compute_metrics(eval_preds, dataset, output_dir: str = "evaluation_results")
         metrics[f'{class_name}_f1'] = f1_score(true_binary, pred_binary)
         metrics[f'{class_name}_precision'] = precision_score(true_binary, pred_binary)
         metrics[f'{class_name}_recall'] = recall_score(true_binary, pred_binary)
+        exact_matches = (true_binary & pred_binary)
+        metrics[f'{class_name}_exact_match'] = np.mean(exact_matches)
     
     print(dataset)
     # Generate error analysis
@@ -158,6 +171,7 @@ def compute_metrics(eval_preds, dataset, output_dir: str = "evaluation_results")
         print(f"F1: {metrics[f'{class_name}_f1']:.3f}")
         print(f"Precision: {metrics[f'{class_name}_precision']:.3f}")
         print(f"Recall: {metrics[f'{class_name}_recall']:.3f}")
+        print(f"Exact Match: {metrics[f'{class_name}_recall']:.3f}")
     
     return metrics
 

@@ -1,4 +1,3 @@
-import os
 import json
 from dataclasses import dataclass
 from transformers import (
@@ -9,8 +8,7 @@ from transformers import (
     Trainer
 )
 import datasets
-import evaluate
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional
 from helpersyn import prepare_dataset_yn, convert_boolq_to_yn, convert_contrast_to_yn, convert_pubmed_to_yn, compute_metrics
 
 
@@ -39,15 +37,23 @@ def main():
         dataset = datasets.load_dataset('boolq')
         dataset = convert_boolq_to_yn(dataset)
         eval_split = 'validation'
-    elif model_args.dataset == 'qiaojin/PubMedQA':
-        dataset = datasets.load_dataset(model_args.dataset, model_args.datasubset)
-        dataset = convert_pubmed_to_yn(dataset)
-        eval_split = 'validation' if 'validation' in dataset else 'test' if 'test' in dataset else 'train'
     elif model_args.dataset == 'contrast':
         with open('boolq_perturbed.json', 'r') as f:
-          json_data = json.load(f)
+            json_data = json.load(f)
         dataset = convert_contrast_to_yn(json_data)
         eval_split = 'validation' if 'validation' in dataset else 'test' if 'test' in dataset else 'train'
+    elif model_args.dataset == 'qiaojin/PubMedQA':
+        dataset = datasets.load_dataset(model_args.dataset, model_args.datasubset)
+        if model_args.datasubset == 'pqa_labeled':
+            with open('pubmed_test.json', 'r') as f:
+                pubmed_test = json.load(f)
+            dataset = convert_pubmed_to_yn(dataset, list(map(int, list(pubmed_test.keys()))))
+            eval_split = 'test'
+        else:
+            dataset = convert_pubmed_to_yn(dataset, [])
+            eval_split = 'train'
+
+        
     elif model_args.dataset.endswith('.json') or model_args.dataset.endswith('.jsonl'):
         dataset = datasets.load_dataset('json', data_files=model_args.dataset)
         eval_split = 'validation' if 'validation' in dataset else 'test' if 'test' in dataset else 'train'
@@ -57,12 +63,6 @@ def main():
     else:
         dataset = datasets.load_dataset(model_args.dataset)
         eval_split = 'validation'
-
-    # data_list = [example for example in dataset['train']]
-
-    # # check dataset formats
-    # with open(f'datasets/{model_args.dataset}.json', 'w', encoding='utf-8') as f:
-    #     json.dump(data_list, f, ensure_ascii=False, indent=2)
 
     train_dataset = None
     eval_dataset = None
