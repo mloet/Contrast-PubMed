@@ -4,3 +4,6 @@ torch
 tqdm
 transformers
 evaluate
+json
+numpy
+scikit-learn
