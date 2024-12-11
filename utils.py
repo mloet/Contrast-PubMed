@@ -124,8 +124,8 @@ def convert_pubmed_to_yn(dataset, test_split):
         converted_dataset['train'] = datasets.Dataset.from_list(train_examples + test_examples[:267])
         converted_dataset['test'] = datasets.Dataset.from_list(test_examples[267:])
     else:
-        no_examples = list(examples.filter(lambda x: x['final_decision'] == 'no'))[:2000]
-        yes_examples = list(examples.filter(lambda x: x['final_decision'] == 'yes'))[:3000]
+        no_examples = list(examples.filter(lambda x: x['final_decision'] == 'no'))[:1600]
+        yes_examples = list(examples.filter(lambda x: x['final_decision'] == 'yes'))[:2400]
         converted_dataset['train'] = datasets.Dataset.from_list(no_examples + yes_examples).shuffle(seed=0)
         
     for split in converted_dataset.keys():
