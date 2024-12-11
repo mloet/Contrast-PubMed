@@ -3,6 +3,9 @@ import json
 import datasets
 import numpy as np
 from sklearn.metrics import f1_score, precision_score, recall_score
+from transformers import Trainer
+import torch
+import torch.nn.functional as F
 
 
 def prepare_dataset_yn(examples, tokenizer, max_length):
@@ -19,6 +22,22 @@ def prepare_dataset_yn(examples, tokenizer, max_length):
     tokenized['labels'] = [label_map[label] for label in examples['label']]
     
     return tokenized
+
+def prepare_bundle_features(examples, tokenizer, max_length):
+    """Prepare features for bundle training"""
+    features = tokenizer(
+        examples['question'],
+        examples['context'],
+        max_length=max_length,
+        truncation=True,
+        padding='max_length'
+    )
+    
+    label_map = {'yes': 0, 'no': 1}
+    features['labels'] = [label_map[label] for label in examples['label']]
+    features['bundle_ids'] = examples['bundle_id']
+    
+    return features
 
 def convert_boolq_to_yn(dataset):
     def convert_example(example):
@@ -57,6 +76,33 @@ def convert_contrast_to_yn(json_data):
         })
     }
 
+def convert_bundles_to_yn(json_data):
+    questions = []
+    contexts = []
+    labels = []
+    bundle_ids = []
+    
+    id = 0
+    for item in json_data['data']:
+        questions.append(item['question'])
+        contexts.append(item['paragraph'])
+        labels.append('yes' if item['answer'].upper() == 'TRUE' else 'no')
+        bundle_ids.append(id)
+        for perturbed in item['perturbed_questions']:
+            questions.append(perturbed['perturbed_q'])
+            contexts.append(item['paragraph'])
+            labels.append('yes' if perturbed['answer'].upper() == 'TRUE' else 'no')
+            bundle_ids.append(id)
+        id+=1
+    return {
+        'train': datasets.Dataset.from_dict({
+            'question': questions[2:],
+            'context': contexts[2:],
+            'label': labels[2:],
+            'bundle_id': bundle_ids[2:]
+        })
+    }
+
 def convert_pubmed_to_yn(dataset, test_split):
     def convert_example(example):
         return {
@@ -78,8 +124,8 @@ def convert_pubmed_to_yn(dataset, test_split):
         converted_dataset['train'] = datasets.Dataset.from_list(train_examples)
         converted_dataset['test'] = datasets.Dataset.from_list(test_examples)
     else:
-        no_examples = list(examples.filter(lambda x: x['final_decision'] == 'no'))
-        yes_examples = list(examples.filter(lambda x: x['final_decision'] == 'yes'))[:22700]
+        no_examples = list(examples.filter(lambda x: x['final_decision'] == 'no'))[:1600]
+        yes_examples = list(examples.filter(lambda x: x['final_decision'] == 'yes'))[:2400]
         converted_dataset['train'] = datasets.Dataset.from_list(no_examples + yes_examples).shuffle(seed=0)
         
     for split in converted_dataset.keys():
@@ -174,4 +220,123 @@ def compute_metrics(eval_preds, dataset, output_dir: str = "evaluation_results")
         print(f"Exact Match: {metrics[f'{class_name}_recall']:.3f}")
     
     return metrics
+
+class BundleTrainer(Trainer):
+    """
+    Trainer specifically designed for instance bundles with question conditional loss.
+    Should only be used with datasets that have bundle information.
+    """
+    def __init__(self, *args, bundle_args= {'temperature': 0.1, 'mle_weight': 1.0, 'ce_weight': 1.0}, **kwargs):
+        kwargs['data_collator'] = self.default_bundle_collator
+        super().__init__(*args, **kwargs)
+        self.bundle_args = bundle_args 
+
+    def default_bundle_collator(self, features):
+        """Default collate function that ensures bundle_ids are included"""
+        batch = self.tokenizer.pad(
+            features,
+            padding=True,
+            return_tensors="pt",
+        )
+        
+        batch["bundle_ids"] = torch.tensor([f["bundle_ids"] for f in features], dtype=torch.long)
+        
+        return batch
+
+    def compute_question_conditional_loss(self, model_output, inputs):
+        """Compute question-conditional contrastive loss over bundles."""
+        logits = model_output.logits  # Predicted logits from the model
+        bundle_ids = inputs["bundle_ids"]  # Bundle IDs
+        labels = inputs["labels"]  # Ground-truth labels
+        
+        qc_loss = 0.0
+        device = logits.device
+        unique_bundles = torch.unique(bundle_ids)
+        
+        for bundle_id in unique_bundles:
+            # Mask to extract examples in the current bundle
+            bundle_mask = (bundle_ids == bundle_id)
+            bundle_logits = logits[bundle_mask]
+            bundle_labels = labels[bundle_mask]
+            
+            if len(bundle_logits) <= 1:
+                continue  # Skip bundles with only one example
+            
+            # Identify positive examples
+            positive_mask = (bundle_labels == 1)
+            if positive_mask.sum() == 0:
+                continue  # Skip bundles without any positive examples
+            
+            positive_logits = bundle_logits[positive_mask]  # Positive logits
+            all_logits = bundle_logits  # All logits in the bundle
+            
+            # Compute similarity scores
+            similarities = torch.matmul(all_logits, positive_logits.t())  # [N, P]
+            similarities /= self.bundle_args["temperature"]  # Scale by temperature
+            
+            # Create target labels (row indices of `positive_logits`)
+            # Each row in `similarities` should target its corresponding column in `positive_logits`
+            targets = torch.arange(positive_logits.size(0), device=device).repeat(all_logits.size(0))
+            
+            # Compute cross-entropy loss
+            qc_loss += F.cross_entropy(similarities, targets[:similarities.size(0)])
+        
+        # Normalize by the number of bundles
+        return qc_loss / len(unique_bundles) if len(unique_bundles) > 0 else torch.tensor(0.0, device=device)
+
+
+    # def compute_question_conditional_loss(self, model_output, inputs):
+    #     """Compute question conditional loss over bundles"""
+    #     logits = model_output.logits
+    #     bundle_ids = inputs["bundle_ids"]
+    #     labels = inputs["labels"]
+        
+    #     qc_loss = torch.tensor(0.0, device=logits.device)
+    #     unique_bundles = torch.unique(bundle_ids)
+        
+    #     for bundle_id in unique_bundles:
+    #         # Get questions from this bundle
+    #         bundle_mask = (bundle_ids == bundle_id)
+    #         bundle_logits = logits[bundle_mask]
+    #         bundle_labels = labels[bundle_mask]
+            
+    #         if len(bundle_logits) <= 1:
+    #             continue
+                
+    #         # Get positive examples (where label is 1)
+    #         positive_mask = (bundle_labels == 1)
+    #         if not torch.any(positive_mask):
+    #             continue
+                
+    #         positive_logits = bundle_logits[positive_mask]
+            
+    #         # Compute similarities between questions
+    #         similarities = torch.matmul(bundle_logits, positive_logits.t())
+    #         similarities = similarities / self.bundle_args['temperature']
+            
+    #         # Create target distribution
+    #         targets = torch.zeros_like(similarities)
+    #         targets[positive_mask] = 1.0 / positive_mask.sum()
+            
+    #         # Compute cross entropy loss
+    #         qc_loss += F.cross_entropy(similarities, targets)
+            
+    #     return qc_loss / len(unique_bundles) if len(unique_bundles) > 0 else qc_loss
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        model_inputs = {k: v for k, v in inputs.items() 
+                       if k in ["input_ids", "attention_mask", "token_type_ids", "labels"]}
+        outputs = model(**model_inputs)
+        
+        # Standard classification loss (MLE)
+        mle_loss = outputs.loss
+        
+        # Question conditional contrastive loss
+        qc_loss = self.compute_question_conditional_loss(outputs, inputs)
+        
+        # Combine losses
+        total_loss = (self.bundle_args['mle_weight'] * mle_loss + 
+                     self.bundle_args['ce_weight'] * qc_loss)
+        
+        return (total_loss, outputs) if return_outputs else total_loss
 

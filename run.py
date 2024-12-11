@@ -8,8 +8,9 @@ from transformers import (
     Trainer
 )
 import datasets
-from typing import Optional
-from utils import prepare_dataset_yn, convert_boolq_to_yn, convert_contrast_to_yn, convert_pubmed_to_yn, compute_metrics
+from transformers import DataCollatorWithPadding, PreTrainedTokenizerBase
+from typing import Optional, List, Dict, Union
+from utils import * # prepare_dataset_yn, convert_boolq_to_yn, convert_contrast_to_yn, convert_pubmed_to_yn, compute_metrics
 
 
 @dataclass
@@ -29,7 +30,7 @@ def main():
         model_args.model,
         num_labels=2
     )
-    
+
     tokenizer = AutoTokenizer.from_pretrained(model_args.model)
 
     # Load dataset
@@ -40,8 +41,8 @@ def main():
     elif model_args.dataset == 'contrast':
         with open('boolq_perturbed.json', 'r') as f:
             json_data = json.load(f)
-        dataset = convert_contrast_to_yn(json_data)
-        eval_split = 'validation' if 'validation' in dataset else 'test' if 'test' in dataset else 'train'
+        dataset = convert_bundles_to_yn(json_data)
+        eval_split = 'train'
     elif model_args.dataset == 'qiaojin/PubMedQA':
         dataset = datasets.load_dataset(model_args.dataset, model_args.datasubset)
         if model_args.datasubset == 'pqa_labeled':
@@ -52,8 +53,6 @@ def main():
         else:
             dataset = convert_pubmed_to_yn(dataset, [])
             eval_split = 'train'
-
-        
     elif model_args.dataset.endswith('.json') or model_args.dataset.endswith('.jsonl'):
         dataset = datasets.load_dataset('json', data_files=model_args.dataset)
         eval_split = 'validation' if 'validation' in dataset else 'test' if 'test' in dataset else 'train'
@@ -66,6 +65,13 @@ def main():
 
     train_dataset = None
     eval_dataset = None
+
+    prepare_fn = prepare_dataset_yn
+    trainer_class = Trainer
+    if model_args.dataset == 'contrast':
+        prepare_fn = prepare_bundle_features
+        trainer_class = BundleTrainer
+        training_args.remove_unused_columns=False
     
     if training_args.do_train:
         train_dataset = dataset['train']
@@ -73,7 +79,7 @@ def main():
             train_dataset = train_dataset.select(range(model_args.max_train_samples))
         
         train_dataset = train_dataset.map(
-            lambda x: prepare_dataset_yn(x, tokenizer, model_args.max_length),
+            lambda x: prepare_fn(x, tokenizer, model_args.max_length),
             batched=True,
             remove_columns=train_dataset.column_names
         )
@@ -84,13 +90,14 @@ def main():
             eval_dataset = eval_dataset.select(range(model_args.max_eval_samples))
         
         eval_dataset = eval_dataset.map(
-            lambda x: prepare_dataset_yn(x, tokenizer, model_args.max_length),
+            lambda x: prepare_fn(x, tokenizer, model_args.max_length),
             batched=True,
             remove_columns=eval_dataset.column_names
         )
 
+
     # Initialize trainer
-    trainer = Trainer(
+    trainer = trainer_class(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -102,7 +109,7 @@ def main():
             ),
         tokenizer=tokenizer,
     )
-
+    
     # Training
     if training_args.do_train:
         trainer.train()
