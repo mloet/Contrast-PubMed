@@ -8,9 +8,8 @@ from transformers import (
     Trainer
 )
 import datasets
-from transformers import DataCollatorWithPadding, PreTrainedTokenizerBase
-from typing import Optional, List, Dict, Union
-from utils import * # prepare_dataset_yn, convert_boolq_to_yn, convert_contrast_to_yn, convert_pubmed_to_yn, compute_metrics
+from typing import Optional
+from utils import * 
 
 
 @dataclass

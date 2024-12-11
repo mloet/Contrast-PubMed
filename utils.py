@@ -121,11 +121,11 @@ def convert_pubmed_to_yn(dataset, test_split):
         test_examples = [ex for ex in examples if int(ex['pubid']) in test_split]
         train_examples = [ex for ex in examples if int(ex['pubid']) not in test_split]
         
-        converted_dataset['train'] = datasets.Dataset.from_list(train_examples)
-        converted_dataset['test'] = datasets.Dataset.from_list(test_examples)
+        converted_dataset['train'] = datasets.Dataset.from_list(train_examples + test_examples[:267])
+        converted_dataset['test'] = datasets.Dataset.from_list(test_examples[267:])
     else:
-        no_examples = list(examples.filter(lambda x: x['final_decision'] == 'no'))[:1600]
-        yes_examples = list(examples.filter(lambda x: x['final_decision'] == 'yes'))[:2400]
+        no_examples = list(examples.filter(lambda x: x['final_decision'] == 'no'))[:2000]
+        yes_examples = list(examples.filter(lambda x: x['final_decision'] == 'yes'))[:3000]
         converted_dataset['train'] = datasets.Dataset.from_list(no_examples + yes_examples).shuffle(seed=0)
         
     for split in converted_dataset.keys():
@@ -283,45 +283,6 @@ class BundleTrainer(Trainer):
         
         # Normalize by the number of bundles
         return qc_loss / len(unique_bundles) if len(unique_bundles) > 0 else torch.tensor(0.0, device=device)
-
-
-    # def compute_question_conditional_loss(self, model_output, inputs):
-    #     """Compute question conditional loss over bundles"""
-    #     logits = model_output.logits
-    #     bundle_ids = inputs["bundle_ids"]
-    #     labels = inputs["labels"]
-        
-    #     qc_loss = torch.tensor(0.0, device=logits.device)
-    #     unique_bundles = torch.unique(bundle_ids)
-        
-    #     for bundle_id in unique_bundles:
-    #         # Get questions from this bundle
-    #         bundle_mask = (bundle_ids == bundle_id)
-    #         bundle_logits = logits[bundle_mask]
-    #         bundle_labels = labels[bundle_mask]
-            
-    #         if len(bundle_logits) <= 1:
-    #             continue
-                
-    #         # Get positive examples (where label is 1)
-    #         positive_mask = (bundle_labels == 1)
-    #         if not torch.any(positive_mask):
-    #             continue
-                
-    #         positive_logits = bundle_logits[positive_mask]
-            
-    #         # Compute similarities between questions
-    #         similarities = torch.matmul(bundle_logits, positive_logits.t())
-    #         similarities = similarities / self.bundle_args['temperature']
-            
-    #         # Create target distribution
-    #         targets = torch.zeros_like(similarities)
-    #         targets[positive_mask] = 1.0 / positive_mask.sum()
-            
-    #         # Compute cross entropy loss
-    #         qc_loss += F.cross_entropy(similarities, targets)
-            
-    #     return qc_loss / len(unique_bundles) if len(unique_bundles) > 0 else qc_loss
 
     def compute_loss(self, model, inputs, return_outputs=False):
         model_inputs = {k: v for k, v in inputs.items() 
