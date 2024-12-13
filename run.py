@@ -20,6 +20,8 @@ class ModelArguments:
     max_eval_samples: Optional[int] = None
     dataset: Optional[str] = None
     datasubset: Optional[str] = None
+    stride: bool = False
+
 
 def main():
     parser = HfArgumentParser((TrainingArguments, ModelArguments))
@@ -52,6 +54,19 @@ def main():
         else:
             dataset = convert_pubmed_to_yn(dataset, [])
             eval_split = 'train'
+    elif model_args.dataset == 'bioasq':
+        with open('datasets/BioASQ-training12b/training12b_new.json', 'r') as f:
+            bio_train_data = json.load(f)
+        with open('datasets/Task12BGoldenEnriched/12B1_golden.json', 'r') as f:
+            bio_test_data1 = json.load(f)
+        with open('datasets/Task12BGoldenEnriched/12B2_golden.json', 'r') as f:
+            bio_test_data2 = json.load(f)
+        with open('datasets/Task12BGoldenEnriched/12B3_golden.json', 'r') as f:
+            bio_test_data3 = json.load(f)
+        with open('datasets/Task12BGoldenEnriched/12B4_golden.json', 'r') as f:
+            bio_test_data4 = json.load(f)
+        dataset = convert_bioasq_to_yn(bio_train_data, [bio_test_data1, bio_test_data2, bio_test_data3, bio_test_data4])
+        eval_split = 'train'
     elif model_args.dataset.endswith('.json') or model_args.dataset.endswith('.jsonl'):
         dataset = datasets.load_dataset('json', data_files=model_args.dataset)
         eval_split = 'validation' if 'validation' in dataset else 'test' if 'test' in dataset else 'train'
@@ -65,11 +80,15 @@ def main():
     train_dataset = None
     eval_dataset = None
 
-    prepare_fn = prepare_dataset_yn
+    prepare_fn = prepare_dataset_features
     trainer_class = Trainer
     if model_args.dataset == 'contrast':
         prepare_fn = prepare_bundle_features
         trainer_class = BundleTrainer
+        training_args.remove_unused_columns=False
+    if model_args.stride:
+        prepare_fn = prepare_stride_features2
+        trainer_class = YesNoTrainer
         training_args.remove_unused_columns=False
     
     if training_args.do_train:
@@ -94,7 +113,7 @@ def main():
             remove_columns=eval_dataset.column_names
         )
 
-
+    print(train_dataset)
     # Initialize trainer
     trainer = trainer_class(
         model=model,
