@@ -10,6 +10,7 @@ from transformers import (
 import datasets
 from typing import Optional
 from utils import * 
+from preprocess import *
 
 
 @dataclass
@@ -87,8 +88,8 @@ def main():
         trainer_class = BundleTrainer
         training_args.remove_unused_columns=False
     if model_args.stride:
-        prepare_fn = prepare_stride_features2
-        trainer_class = YesNoTrainer
+        prepare_fn = prepare_stride_features
+        trainer_class = StrideTrainer
         training_args.remove_unused_columns=False
     
     if training_args.do_train:
@@ -113,7 +114,6 @@ def main():
             remove_columns=eval_dataset.column_names
         )
 
-    print(train_dataset)
     # Initialize trainer
     trainer = trainer_class(
         model=model,

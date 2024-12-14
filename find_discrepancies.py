@@ -32,17 +32,14 @@ def find_and_write_unique_lines(file1_path: str, file2_path: str, output_path: s
             except json.JSONDecodeError:
                 continue
     
-    # Find unique lines by comparing dictionaries
     unique_lines = []
     for line in file1_lines:
         if line not in file2_lines:
             unique_lines.append(line)
     
-    # Create output directory if it doesn't exist
     output_dir = Path(output_path).parent
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Write unique lines to output file
     with open(output_path, 'w', encoding='utf-8') as f_out:
         for line in unique_lines:
             json.dump(line, f_out, ensure_ascii=False)
